@@ -1,0 +1,50 @@
+on:   이 섹션은 워크플로우가 실행되는 트리거를 정의합니다. 
+  push:  push 이벤트가 발생하면, 즉 코드가 푸시되면 워크플로우가 실행됩니다.
+    branches:  branches: - main은 main 브랜치에 푸시될 때만 워크플로우가 실행된다는 의미입니다.
+      - main
+
+jobs: 워크플로우는 하나 이상의 작업(Job)으로 구성됩니다. 여기서는 deploy라는 작업이 정의되어 있습니다.
+  deploy: 
+    runs-on: ubuntu-latest  runs-on: ubuntu-latest는 이 작업이 최신 버전의 Ubuntu 환경에서 실행된다는 의미입니다.
+
+    steps:  각 작업은 여러 단계(Step)로 구성됩니다. 이 작업에는 총 8단계가 있습니다. 
+      - name: Checkout code 
+        uses: actions/checkout@v2  actions/checkout@v2 액션을 사용하여 코드를 체크아웃합니다. 즉, 저장소의 코드를 가져옵니다.
+
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.5.3 webfactory/ssh-agent@v0.5.3 액션을 사용하여 SSH를 설정합니다.
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}  SSH 비밀 키를 설정합니다. 이는 원격 서버에 접근하기 위해 사용됩니다.
+
+      - name: Set up JDK 17 
+        uses: actions/setup-java@v2  JDK(Java Development Kit) 17을 설정합니다.
+        with:
+          distribution: "adopt"
+          java-version: "17"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew  명령어를 실행하여 gradlew 파일에 실행 권한을 부여합니다.
+        shell: bash
+
+      - name: Build with Gradle
+        run: ./gradlew clean build -x test  명령어를 실행하여 프로젝트를 빌드합니다.
+
+      - name: Add known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 180.71.58.10 >> ~/.ssh/known_hosts 원격 서버의 호스트 키를 ~/.ssh/known_hosts 파일에 추가합니다.
+      - name: Copy project files via scp
+        run: |
+          echo "Copying project files to remote server..." | tee copy_files.log
+          scp -P 2002 -o StrictHostKeyChecking=no -r build/libs/*.jar ubuntu@180.71.58.10:/home/ubuntu/spring-boot-app/ 2>&1 | tee -a copy_files.log 
+          명령어를 사용하여 빌드된 프로젝트 파일을 원격 서버에 복사합니다.
+      
+      - name: Execute remote commands
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@180.71.58.10 -p 2002 "
+            echo 'Killing existing Java process...' | tee -a /home/ubuntu/spring-boot-app/deploy.log &&
+            pkill -f 'java -jar' || true | tee -a /home/ubuntu/spring-boot-app/deploy.log &&   기존의 Java 프로세스를 종료하고, 새로운 애플리케이션 인스턴스를 시작합니다. 
+
+            nohup /application/jdk-17.0.11/bin/java -DServer.port=14343 -Dobj_name=SPRING_BOOT_APP -jar /home/ubuntu/spring-boot-app/*.jar > /home/ubuntu/spring-boot-app/app.log 2>&1 &  nohup 명령어를 사용하여 애플리케이션을 백그라운드에서 실행합니다.
+          "
